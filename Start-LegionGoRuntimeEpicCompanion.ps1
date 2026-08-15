@@ -58,8 +58,8 @@ if ($PSBoundParameters.ContainsKey('ThermalProfile')) {
 }
 
 if ($PSCmdlet.ParameterSetName -eq 'ByAppId') {
-    Start-EpicGame -AppId $AppId @sessionParameters
+    Start-EpicGameSession -AppId $AppId @sessionParameters
 }
 else {
-    Start-EpicGame -Name $Name @sessionParameters
+    Start-EpicGameSession -Name $Name @sessionParameters
 }

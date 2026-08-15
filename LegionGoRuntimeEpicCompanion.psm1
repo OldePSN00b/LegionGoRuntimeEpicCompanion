@@ -17,6 +17,8 @@ function Get-DefaultEpicCompanionSetting {
         UseLosslessScaling             = $true
         CloseLosslessScalingAfterGame  = $true
         LosslessScalingPathOverride    = ''
+        GameStartTimeoutSeconds        = 300
+        PollIntervalSeconds            = 2
         GameOverrides                  = [pscustomobject]@{}
     }
 }
@@ -50,61 +52,52 @@ function Write-EpicCompanionSetting {
     }
 }
 
-function Get-EpicCompanionSetting {
-    <#
-    .SYNOPSIS
-        Gets persistent Epic companion settings.
-    #>
+function ConvertTo-NormalizedEpicCompanionSetting {
     [CmdletBinding()]
-    param()
+    param([Parameter(Mandatory)][psobject]$Setting)
 
-    $defaults = Get-DefaultEpicCompanionSetting
-    if (-not (Test-Path -LiteralPath $script:SettingsPath -PathType Leaf)) {
-        Write-EpicCompanionSetting -Setting $defaults
-        return $defaults
-    }
-
-    try {
-        $setting = Get-Content -LiteralPath $script:SettingsPath -Raw | ConvertFrom-Json -ErrorAction Stop
-    }
-    catch {
-        throw ("Failed to read Epic companion settings '{0}': {1}" -f $script:SettingsPath, $_.Exception.Message)
-    }
-
-    if (-not $setting.PSObject.Properties['DefaultThermalProfile']) {
-        $setting | Add-Member -MemberType NoteProperty -Name DefaultThermalProfile -Value 'Balanced'
-    }
-    foreach ($defaultPropertyName in @('UseLosslessScaling', 'CloseLosslessScalingAfterGame', 'LosslessScalingPathOverride')) {
-        if (-not $setting.PSObject.Properties[$defaultPropertyName]) {
-            $setting | Add-Member -MemberType NoteProperty -Name $defaultPropertyName -Value $defaults.$defaultPropertyName
-        }
-    }
-    if (-not $setting.PSObject.Properties['GameOverrides'] -or $null -eq $setting.GameOverrides) {
-        if ($setting.PSObject.Properties['GameOverrides']) { $setting.GameOverrides = [pscustomobject]@{} }
-        else { $setting | Add-Member -MemberType NoteProperty -Name GameOverrides -Value ([pscustomobject]@{}) }
+    $validProfiles = @('Quiet', 'Balanced', 'Performance')
+    if ([string]$Setting.DefaultThermalProfile -notin $validProfiles) {
+        throw 'DefaultThermalProfile must be Quiet, Balanced, or Performance.'
     }
 
     foreach ($booleanName in @('UseLosslessScaling', 'CloseLosslessScalingAfterGame')) {
-        $value = $setting.$booleanName
+        $value = $Setting.$booleanName
         if ($value -is [bool]) { continue }
         $parsedBoolean = $false
         if ($value -is [string] -and [bool]::TryParse($value, [ref]$parsedBoolean)) {
-            $setting.$booleanName = $parsedBoolean
+            $Setting.$booleanName = $parsedBoolean
+            continue
         }
-        else {
-            throw ("{0} must be true or false." -f $booleanName)
-        }
+        throw ("{0} must be true or false." -f $booleanName)
     }
-    $setting.LosslessScalingPathOverride = [string]$setting.LosslessScalingPathOverride
 
-    $validProfiles = @('Quiet', 'Balanced', 'Performance')
-    if ([string]$setting.DefaultThermalProfile -notin $validProfiles) {
-        throw 'DefaultThermalProfile must be Quiet, Balanced, or Performance.'
+    foreach ($range in @(
+        @{ Name = 'GameStartTimeoutSeconds'; Minimum = 30; Maximum = 3600 },
+        @{ Name = 'PollIntervalSeconds'; Minimum = 1; Maximum = 30 }
+    )) {
+        $parsedInteger = 0
+        if (-not [int]::TryParse([string]$Setting.($range.Name), [ref]$parsedInteger) -or
+            $parsedInteger -lt $range.Minimum -or $parsedInteger -gt $range.Maximum) {
+            throw ("{0} must be an integer from {1} through {2}." -f $range.Name, $range.Minimum, $range.Maximum)
+        }
+        $Setting.($range.Name) = $parsedInteger
     }
-    foreach ($property in @($setting.GameOverrides.PSObject.Properties)) {
+
+    $Setting.LosslessScalingPathOverride = [string]$Setting.LosslessScalingPathOverride
+    if ($null -eq $Setting.GameOverrides) {
+        $Setting.GameOverrides = [pscustomobject]@{}
+    }
+    elseif ($Setting.GameOverrides -is [string] -or $Setting.GameOverrides -is [System.Array] -or
+        $Setting.GameOverrides.GetType().IsValueType) {
+        throw 'GameOverrides must be a JSON object.'
+    }
+
+    foreach ($property in @($Setting.GameOverrides.PSObject.Properties)) {
         $override = $property.Value
-        if ($null -eq $override) {
-            throw ("GameOverrides.{0} must contain at least one supported profile property." -f $property.Name)
+        if ($null -eq $override -or $override -is [string] -or $override -is [System.Array] -or
+            $override.GetType().IsValueType) {
+            throw ("GameOverrides.{0} must be a JSON object." -f $property.Name)
         }
         if ($override.PSObject.Properties['ThermalProfile'] -and
             [string]$override.ThermalProfile -notin $validProfiles) {
@@ -123,11 +116,17 @@ function Get-EpicCompanionSetting {
             }
         }
         if ($override.PSObject.Properties['ProcessName']) {
-            $override.ProcessName = [string[]]@(
+            $normalizedProcessNames = [string[]]@(
                 $override.ProcessName |
                     ForEach-Object { [string]$_ } |
                     Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
             )
+            if (@($normalizedProcessNames).Count -gt 0) {
+                $override.ProcessName = $normalizedProcessNames
+            }
+            else {
+                $override.PSObject.Properties.Remove('ProcessName')
+            }
         }
         if (-not $override.PSObject.Properties['ThermalProfile'] -and
             -not $override.PSObject.Properties['UseLosslessScaling'] -and
@@ -136,7 +135,37 @@ function Get-EpicCompanionSetting {
         }
     }
 
-    $setting
+    return $Setting
+}
+
+function Get-EpicCompanionSetting {
+    <#
+    .SYNOPSIS
+        Gets persistent Epic companion settings.
+    #>
+    [CmdletBinding()]
+    param()
+
+    $defaults = Get-DefaultEpicCompanionSetting
+    if (-not (Test-Path -LiteralPath $script:SettingsPath -PathType Leaf)) {
+        Write-EpicCompanionSetting -Setting $defaults
+        return $defaults
+    }
+
+    try {
+        $setting = Get-Content -LiteralPath $script:SettingsPath -Raw | ConvertFrom-Json -ErrorAction Stop
+
+        foreach ($defaultProperty in $defaults.PSObject.Properties) {
+            if (-not $setting.PSObject.Properties[$defaultProperty.Name]) {
+                $setting | Add-Member -MemberType NoteProperty -Name $defaultProperty.Name -Value $defaultProperty.Value
+            }
+        }
+
+        return ConvertTo-NormalizedEpicCompanionSetting -Setting $setting
+    }
+    catch {
+        throw ("Unable to read Epic companion settings at '{0}': {1}" -f $script:SettingsPath, $_.Exception.Message)
+    }
 }
 
 function Set-EpicCompanionSetting {
@@ -150,15 +179,15 @@ function Set-EpicCompanionSetting {
         [string]$DefaultThermalProfile,
         [bool]$UseLosslessScaling,
         [bool]$CloseLosslessScalingAfterGame,
-        [string]$LosslessScalingPathOverride
+        [string]$LosslessScalingPathOverride,
+        [ValidateRange(30, 3600)]
+        [int]$GameStartTimeoutSeconds,
+        [ValidateRange(1, 30)]
+        [int]$PollIntervalSeconds
     )
 
-    if ($PSBoundParameters.Count -eq 0) {
-        throw 'Specify at least one setting to change.'
-    }
-
     $setting = Get-EpicCompanionSetting
-    foreach ($propertyName in @('DefaultThermalProfile', 'UseLosslessScaling', 'CloseLosslessScalingAfterGame', 'LosslessScalingPathOverride')) {
+    foreach ($propertyName in @('DefaultThermalProfile', 'UseLosslessScaling', 'CloseLosslessScalingAfterGame', 'LosslessScalingPathOverride', 'GameStartTimeoutSeconds', 'PollIntervalSeconds')) {
         if ($PSBoundParameters.ContainsKey($propertyName)) {
             $setting.$propertyName = $PSBoundParameters[$propertyName]
         }
@@ -252,8 +281,19 @@ function Set-EpicGameProfile {
                 ForEach-Object { [string]$_ } |
                 Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
         )
-        if ($profile.PSObject.Properties['ProcessName']) { $profile.ProcessName = $normalizedProcessNames }
-        else { $profile | Add-Member -MemberType NoteProperty -Name ProcessName -Value $normalizedProcessNames }
+        if (@($normalizedProcessNames).Count -gt 0) {
+            if ($profile.PSObject.Properties['ProcessName']) { $profile.ProcessName = $normalizedProcessNames }
+            else { $profile | Add-Member -MemberType NoteProperty -Name ProcessName -Value $normalizedProcessNames }
+        }
+        elseif ($profile.PSObject.Properties['ProcessName']) {
+            $profile.PSObject.Properties.Remove('ProcessName')
+        }
+    }
+
+    if (-not $profile.PSObject.Properties['ThermalProfile'] -and
+        -not $profile.PSObject.Properties['UseLosslessScaling'] -and
+        -not $profile.PSObject.Properties['ProcessName']) {
+        throw 'A saved game profile must contain ThermalProfile, UseLosslessScaling, or at least one ProcessName.'
     }
 
     if ($existingProperty) { $setting.GameOverrides.$AppId = $profile }
@@ -674,7 +714,7 @@ function Set-ElevatedEpicLegionThermalMode {
         throw "Thermal helper was not found: $script:ThermalHelperPath"
     }
 
-    Write-Host ("Requesting {0} thermal mode..." -f $Mode)
+    Write-Output ("Requesting {0} thermal mode..." -f $Mode)
     $process = Start-Process -FilePath $script:WindowsPowerShellPath -Verb RunAs -ArgumentList @(
         '-NoProfile',
         '-ExecutionPolicy', 'Bypass',
@@ -774,10 +814,10 @@ function Trace-EpicGameLaunch {
         $launchExecutableName = [System.IO.Path]::GetFileName([string]$game.LaunchExecutable)
     }
 
-    Write-Host ("Tracing Epic launch for: {0}" -f $game.Name)
-    Write-Host ("Launch URI: {0}" -f $game.LaunchUri)
-    Write-Host ("Observation window: {0} seconds" -f $ObservationSeconds)
-    Write-Host 'No Legion Go thermal settings will be changed.'
+    Write-Output ("Tracing Epic launch for: {0}" -f $game.Name)
+    Write-Output ("Launch URI: {0}" -f $game.LaunchUri)
+    Write-Output ("Observation window: {0} seconds" -f $ObservationSeconds)
+    Write-Output 'No Legion Go thermal settings will be changed.'
 
     $before = @(Get-EpicProcessSnapshot)
     $knownProcessIds = @{}
@@ -869,10 +909,11 @@ function Start-EpicGame {
 
     .PARAMETER LaunchTimeoutSeconds
         Maximum time to wait for a new game process after invoking Epic.
-        Default: 60 seconds.
+        When omitted, uses the persisted GameStartTimeoutSeconds setting.
 
     .PARAMETER PollIntervalMilliseconds
-        Delay between process checks. Default: 500 milliseconds.
+        Optional one-session delay between process checks. When omitted, uses
+        the persisted PollIntervalSeconds setting.
 
     .PARAMETER StabilitySeconds
         Time a candidate game PID must remain alive before launch is accepted.
@@ -903,11 +944,11 @@ function Start-EpicGame {
 
         [Nullable[bool]]$UseLosslessScaling,
 
-        [ValidateRange(5, 600)]
-        [int]$LaunchTimeoutSeconds = 60,
+        [ValidateRange(5, 3600)]
+        [int]$LaunchTimeoutSeconds,
 
         [ValidateRange(100, 5000)]
-        [int]$PollIntervalMilliseconds = 500,
+        [int]$PollIntervalMilliseconds,
 
         [ValidateRange(0, 10)]
         [int]$StabilitySeconds = 2
@@ -946,6 +987,8 @@ function Start-EpicGame {
     }
 
     $setting = Get-EpicCompanionSetting
+    $effectiveLaunchTimeoutSeconds = if ($PSBoundParameters.ContainsKey('LaunchTimeoutSeconds')) { $LaunchTimeoutSeconds } else { [int]$setting.GameStartTimeoutSeconds }
+    $effectivePollIntervalMilliseconds = if ($PSBoundParameters.ContainsKey('PollIntervalMilliseconds')) { $PollIntervalMilliseconds } else { [int]$setting.PollIntervalSeconds * 1000 }
     $overrideProperty = $setting.GameOverrides.PSObject.Properties[[string]$game.AppId]
     $hasExplicitProcessName = $PSBoundParameters.ContainsKey('ProcessName')
     [string[]]$resolvedProcessNames = @(
@@ -998,11 +1041,11 @@ function Start-EpicGame {
         }
     }
 
-    Write-Host ("Thermal profile for this session: {0} ({1})" -f $effectiveThermalProfile, $thermalProfileSource)
-    Write-Host ("Lossless Scaling for this session: {0} ({1})" -f $(if ($effectiveUseLosslessScaling) { 'On' } else { 'Off' }), $losslessScalingSource)
-    Write-Host ("Launching Epic game: {0}" -f $game.Name)
-    Write-Host ("Session process: {0} ({1})" -f ($resolvedProcessNames -join ", "), $processNameSource)
-    Write-Host ("Launch timeout: {0} seconds" -f $LaunchTimeoutSeconds)
+    Write-Output ("Thermal profile for this session: {0} ({1})" -f $effectiveThermalProfile, $thermalProfileSource)
+    Write-Output ("Lossless Scaling for this session: {0} ({1})" -f $(if ($effectiveUseLosslessScaling) { 'On' } else { 'Off' }), $losslessScalingSource)
+    Write-Output ("Launching Epic game: {0}" -f $game.Name)
+    Write-Output ("Session process: {0} ({1})" -f ($resolvedProcessNames -join ", "), $processNameSource)
+    Write-Output ("Launch timeout: {0} seconds" -f $effectiveLaunchTimeoutSeconds)
 
     $thermalModeChanged = $false
     $losslessScalingWasRunning = $false
@@ -1015,7 +1058,7 @@ function Start-EpicGame {
             $thermalModeChanged = $true
         }
         else {
-            Write-Host 'Balanced is the baseline; no pre-launch thermal mode change is required.'
+            Write-Output 'Balanced is the baseline; no pre-launch thermal mode change is required.'
         }
 
         if ($effectiveUseLosslessScaling) {
@@ -1023,26 +1066,26 @@ function Start-EpicGame {
             if (-not $losslessScalingWasRunning) {
                 $losslessScalingPath = Get-EpicLosslessScalingPath -Setting $setting
                 if (-not $losslessScalingPath) { throw 'Lossless Scaling could not be located.' }
-                Write-Host ("Starting Lossless Scaling: {0}" -f $losslessScalingPath)
-                $losslessScalingStartedProcess = Start-Process -FilePath $losslessScalingPath -PassThru -ErrorAction Stop
+                Write-Output ("Starting Lossless Scaling: {0}" -f $losslessScalingPath)
+                $losslessScalingStartedProcess = Start-Process -FilePath $losslessScalingPath -ArgumentList '-StartMinimized' -PassThru -ErrorAction Stop
             }
             else {
-                Write-Host 'Lossless Scaling is already running.'
+                Write-Output 'Lossless Scaling is already running.'
             }
         }
         else {
-            Write-Host 'Lossless Scaling is disabled for this launch.'
+            Write-Output 'Lossless Scaling is disabled for this launch.'
         }
 
         $launchRequestedAt = Get-Date
         Start-Process -FilePath ([string]$game.LaunchUri) -ErrorAction Stop
 
-        $deadline = $launchRequestedAt.AddSeconds($LaunchTimeoutSeconds)
+        $deadline = $launchRequestedAt.AddSeconds($effectiveLaunchTimeoutSeconds)
         $rejectedCandidateIds = @{}
         $sessionProcess = $null
 
         while ((Get-Date) -lt $deadline -and $null -eq $sessionProcess) {
-            Start-Sleep -Milliseconds $PollIntervalMilliseconds
+            Start-Sleep -Milliseconds $effectivePollIntervalMilliseconds
 
             $candidates = @(
                 Get-EpicProcessSnapshot |
@@ -1071,23 +1114,23 @@ function Start-EpicGame {
         }
 
         if ($null -eq $sessionProcess) {
-            throw ("Epic accepted the launch request for '{0}', but no new session process ({1}) was detected within {2} seconds. The game may be updating, installing prerequisites, waiting for user interaction, or require a ProcessName override." -f $game.Name, ($resolvedProcessNames -join ', '), $LaunchTimeoutSeconds)
+            throw ("Epic accepted the launch request for '{0}', but no new session process ({1}) was detected within {2} seconds. The game may be updating, installing prerequisites, waiting for user interaction, or require a ProcessName override." -f $game.Name, ($resolvedProcessNames -join ', '), $effectiveLaunchTimeoutSeconds)
         }
 
         $sessionProcessId = [int]$sessionProcess.ProcessId
         $sessionStartedAt = Get-Date
         $secondsToDetect = [math]::Round(($sessionStartedAt - $launchRequestedAt).TotalSeconds, 2)
 
-        Write-Host ("Game session detected: {0} (PID {1}) after {2} seconds." -f $sessionProcess.ProcessName, $sessionProcessId, $secondsToDetect)
-        Write-Host 'Monitoring game session. Close the game normally to complete this command.'
+        Write-Output ("Game session detected: {0} (PID {1}) after {2} seconds." -f $sessionProcess.ProcessName, $sessionProcessId, $secondsToDetect)
+        Write-Output 'Monitoring game session. Close the game normally to complete this command.'
 
         while ($null -ne (Get-Process -Id $sessionProcessId -ErrorAction SilentlyContinue)) {
-            Start-Sleep -Milliseconds $PollIntervalMilliseconds
+            Start-Sleep -Milliseconds $effectivePollIntervalMilliseconds
         }
 
         $sessionEndedAt = Get-Date
         $duration = $sessionEndedAt - $sessionStartedAt
-        Write-Host ("Game session ended: {0} (PID {1})." -f $sessionProcess.ProcessName, $sessionProcessId)
+        Write-Output ("Game session ended: {0} (PID {1})." -f $sessionProcess.ProcessName, $sessionProcessId)
 
         $sessionResult = [pscustomobject]@{
             GameName             = $game.Name
@@ -1107,19 +1150,19 @@ function Start-EpicGame {
             SecondsToDetection   = $secondsToDetect
             Duration             = $duration
             DurationSeconds      = [math]::Round($duration.TotalSeconds, 2)
-            LaunchTimeoutSeconds = $LaunchTimeoutSeconds
+            LaunchTimeoutSeconds = $effectiveLaunchTimeoutSeconds
             StabilitySeconds     = $StabilitySeconds
         }
     }
     finally {
         if ($effectiveUseLosslessScaling -and $setting.CloseLosslessScalingAfterGame -and $losslessScalingStartedProcess -and -not $losslessScalingWasRunning) {
-            Write-Host 'Closing Lossless Scaling...'
+            Write-Output 'Closing Lossless Scaling...'
             Get-Process -Id $losslessScalingStartedProcess.Id -ErrorAction SilentlyContinue | Stop-Process -ErrorAction SilentlyContinue
         }
         if ($thermalModeChanged) {
             try {
                 Set-ElevatedEpicLegionThermalMode -Mode Balanced
-                Write-Host 'Balanced thermal mode restored.'
+                Write-Output 'Balanced thermal mode restored.'
             }
             catch {
                 Write-Warning ("Failed to restore Balanced mode: {0}" -f $_.Exception.Message)
@@ -1130,6 +1173,43 @@ function Start-EpicGame {
     if ($null -ne $sessionResult) {
         $sessionResult
     }
+}
+
+function Start-EpicGameSession {
+    <#
+    .SYNOPSIS
+        Launches and monitors one installed Epic Games Launcher title.
+
+    .DESCRIPTION
+        Steam-family command name for Start-EpicGame. Start-EpicGame remains
+        available for backward compatibility.
+    #>
+    [CmdletBinding(DefaultParameterSetName = 'ByName')]
+    param(
+        [Parameter(Mandatory, ParameterSetName = 'ByName')]
+        [string]$Name,
+
+        [Parameter(Mandatory, ParameterSetName = 'ByAppId')]
+        [string]$AppId,
+
+        [Alias('TDProfile')]
+        [ValidateSet('Quiet', 'Balanced', 'Performance')]
+        [string]$ThermalProfile,
+
+        [string[]]$ProcessName,
+        [Nullable[bool]]$UseLosslessScaling,
+
+        [ValidateRange(5, 3600)]
+        [int]$LaunchTimeoutSeconds,
+
+        [ValidateRange(100, 5000)]
+        [int]$PollIntervalMilliseconds,
+
+        [ValidateRange(0, 10)]
+        [int]$StabilitySeconds
+    )
+
+    Start-EpicGame @PSBoundParameters
 }
 
 
@@ -1173,20 +1253,24 @@ function Get-EpicInteractiveLibrary {
     @(
         foreach ($game in $games) {
             $overrideProperty = $setting.GameOverrides.PSObject.Properties[[string]$game.AppId]
-            if ($overrideProperty) {
+            if ($overrideProperty -and $overrideProperty.Value.PSObject.Properties['ThermalProfile']) {
                 $profile = [string]$overrideProperty.Value.ThermalProfile
-                $source = 'Game'
+                $thermalSource = 'Game'
             }
             else {
                 $profile = [string]$setting.DefaultThermalProfile
-                $source = 'Global'
+                $thermalSource = 'Global'
             }
+            $useLosslessScaling = if ($overrideProperty -and $overrideProperty.Value.PSObject.Properties['UseLosslessScaling']) { [bool]$overrideProperty.Value.UseLosslessScaling } else { [bool]$setting.UseLosslessScaling }
+            $losslessScalingSource = if ($overrideProperty -and $overrideProperty.Value.PSObject.Properties['UseLosslessScaling']) { 'Game' } else { 'Global' }
 
             [pscustomobject]@{
                 Name                 = [string]$game.Name
                 AppId                = [string]$game.AppId
                 EffectiveProfile     = $profile
-                ProfileSource        = $source
+                ProfileSource        = $thermalSource
+                UseLosslessScaling   = $useLosslessScaling
+                LosslessScalingSource = $losslessScalingSource
                 LaunchExecutable     = [string]$game.LaunchExecutable
             }
         }
@@ -1207,10 +1291,16 @@ function Show-LegionGoRuntimeEpicCompanion {
     while ($true) {
         Clear-Host
         Write-Host '=== Legion Go Runtime Epic Companion ==='
-        Write-Host 'Type part of a game name to filter, A for all games, S for settings, or Q to quit.'
+        Write-Host 'Type part of a game name to filter, A for all games, R to refresh, S for settings, or Q to quit.'
         $choice = Read-Host 'Selection'
 
         if ($choice -match '^(?i)q$') { return }
+        if ($choice -match '^(?i)r$') {
+            $games = @(Get-EpicInstalledGame)
+            Write-Host ("Epic library refreshed. {0} installed game(s) found." -f @($games).Count)
+            Start-Sleep -Seconds 1
+            continue
+        }
         if ($choice -match '^(?i)s$') {
             $returnToMain = $false
             while (-not $returnToMain) {
@@ -1250,7 +1340,7 @@ function Show-LegionGoRuntimeEpicCompanion {
                         $gameLs = $lsChoice -match '^(?i)y$'
                         Set-EpicGameProfile -AppId $selectedGame.AppId -ThermalProfile $thermal -UseLosslessScaling $gameLs | Out-Null
                     }
-                    '5' {
+                    '4' {
                         [object[]]$profiles = @(Get-EpicGameProfile)
                         if (@($profiles).Count -eq 0) { Read-Host 'No saved game profiles. Press Enter' | Out-Null; continue }
                         Clear-Host
@@ -1269,7 +1359,7 @@ function Show-LegionGoRuntimeEpicCompanion {
                         }
                         Read-Host 'Press Enter to return' | Out-Null
                     }
-                    '4' {
+                    '5' {
                         [object[]]$profiles = @(Get-EpicGameProfile)
                         if (@($profiles).Count -eq 0) { Read-Host 'No saved game profiles. Press Enter' | Out-Null; continue }
                         for ($i=0; $i -lt @($profiles).Count; $i++) {
@@ -1295,9 +1385,9 @@ function Show-LegionGoRuntimeEpicCompanion {
         $setting = Get-EpicCompanionSetting
         for ($index=0; $index -lt @($matches).Count; $index++) {
             $overrideProperty = $setting.GameOverrides.PSObject.Properties[[string]$matches[$index].AppId]
-            if ($overrideProperty -and $overrideProperty.Value.PSObject.Properties['ThermalProfile']) { $thermalProfile = [string]$overrideProperty.Value.ThermalProfile } else { $thermalProfile = [string]$setting.DefaultThermalProfile }
-            if ($overrideProperty -and $overrideProperty.Value.PSObject.Properties['UseLosslessScaling']) { $useLs = [bool]$overrideProperty.Value.UseLosslessScaling } else { $useLs = [bool]$setting.UseLosslessScaling }
-            $sourceText = if ($overrideProperty) { 'Saved profile' } else { 'Global defaults' }
+            if ($overrideProperty -and $overrideProperty.Value.PSObject.Properties['ThermalProfile']) { $thermalProfile = [string]$overrideProperty.Value.ThermalProfile; $thermalSource = 'Game' } else { $thermalProfile = [string]$setting.DefaultThermalProfile; $thermalSource = 'Global' }
+            if ($overrideProperty -and $overrideProperty.Value.PSObject.Properties['UseLosslessScaling']) { $useLs = [bool]$overrideProperty.Value.UseLosslessScaling; $lsSource = 'Game' } else { $useLs = [bool]$setting.UseLosslessScaling; $lsSource = 'Global' }
+            $sourceText = if ($thermalSource -eq 'Game' -and $lsSource -eq 'Game') { 'Saved profile' } elseif ($thermalSource -eq 'Global' -and $lsSource -eq 'Global') { 'Global defaults' } else { 'Mixed sources' }
             $lsText = if ($useLs) { 'On' } else { 'Off' }
             Write-Host ('[{0}] {1} (App ID {2}) [Thermal: {3} | Lossless Scaling: {4} | {5}]' -f ($index+1),$matches[$index].Name,$matches[$index].AppId,$thermalProfile,$lsText,$sourceText)
         }
@@ -1317,7 +1407,7 @@ function Show-LegionGoRuntimeEpicCompanion {
         Write-Host ('  Thermal profile: {0} ({1})' -f $selectedProfile.ThermalProfile,$selectedProfile.Source)
         Write-Host ('  Lossless Scaling: {0} ({1})' -f $selectedLsText,$selectedLsSource)
         Write-Host ''
-        Start-EpicGame -AppId $selectedGame.AppId
+        Start-EpicGameSession -AppId $selectedGame.AppId
         Read-Host 'Press Enter to return to the launcher' | Out-Null
     }
 }
@@ -1342,6 +1432,7 @@ Export-ModuleMember -Function @(
     'Get-EpicInstalledGame',
     'Trace-EpicGameLaunch',
     'Start-EpicGame',
+    'Start-EpicGameSession',
     'Show-LegionGoRuntimeEpicCompanion',
     'Start-EpicCompanion'
 )
