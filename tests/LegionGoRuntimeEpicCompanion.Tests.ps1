@@ -19,6 +19,29 @@ Describe 'Module contract' {
 
         $unapproved.Count | Should Be 0
     }
+
+    It 'exports only the normalized Epic command families and its diagnostic trace' {
+        $actual = @(Get-Command -Module LegionGoRuntimeEpicCompanion -CommandType Function | Select-Object -ExpandProperty Name | Sort-Object)
+        $expected = @(
+            'Get-EpicCompanionSetting',
+            'Get-EpicGameProfile',
+            'Get-EpicInstalledGame',
+            'Remove-EpicGameProfile',
+            'Set-EpicCompanionSetting',
+            'Set-EpicGameProfile',
+            'Start-EpicCompanion',
+            'Start-EpicGameSession',
+            'Trace-EpicGameLaunch'
+        ) | Sort-Object
+
+        @(Compare-Object -ReferenceObject $expected -DifferenceObject $actual).Count | Should Be 0
+    }
+
+    It 'exposes the shared launcher session parameter sets' {
+        $command = Get-Command Start-EpicGameSession
+        @($command.ParameterSets.Name | Sort-Object) -join ',' | Should Be 'ByAppId,ByName,ByObject'
+        $command.Parameters['Game'].Attributes.ValueFromPipeline | Should Be $true
+    }
 }
 
 Describe 'Settings validation' {
@@ -123,23 +146,6 @@ Describe 'Saved game profiles' {
     }
 }
 
-Describe 'Steam-family session command' {
-    InModuleScope LegionGoRuntimeEpicCompanion {
-        It 'forwards only explicitly bound values to Start-EpicGame' {
-            Mock Start-EpicGame { }
-
-            Start-EpicGameSession -AppId 'ExampleGame' -ThermalProfile Quiet
-
-            Assert-MockCalled Start-EpicGame -Times 1 -Exactly -ParameterFilter {
-                $AppId -eq 'ExampleGame' -and
-                $ThermalProfile -eq 'Quiet' -and
-                -not $PSBoundParameters.ContainsKey('LaunchTimeoutSeconds') -and
-                -not $PSBoundParameters.ContainsKey('PollIntervalMilliseconds')
-            }
-        }
-    }
-}
-
 Describe 'Interactive settings actions' {
     InModuleScope LegionGoRuntimeEpicCompanion {
         function New-TestEpicSetting {
@@ -164,7 +170,7 @@ Describe 'Interactive settings actions' {
             Mock Get-EpicGameProfile { [pscustomobject]@{ AppId = 'ExampleGame'; ThermalProfile = 'Performance'; UseLosslessScaling = $null; ProcessName = @() } }
             Mock Remove-EpicGameProfile { }
 
-            Show-LegionGoRuntimeEpicCompanion
+            Start-EpicCompanion
 
             Assert-MockCalled Remove-EpicGameProfile -Times 0 -Exactly
         }
@@ -183,7 +189,7 @@ Describe 'Interactive settings actions' {
             Mock Get-EpicGameProfile { [pscustomobject]@{ AppId = 'ExampleGame'; ThermalProfile = 'Performance'; UseLosslessScaling = $null; ProcessName = @() } }
             Mock Remove-EpicGameProfile { }
 
-            Show-LegionGoRuntimeEpicCompanion
+            Start-EpicCompanion
 
             Assert-MockCalled Remove-EpicGameProfile -Times 1 -Exactly -ParameterFilter { $AppId -eq 'ExampleGame' }
         }
@@ -200,7 +206,7 @@ Describe 'Interactive settings actions' {
             Mock Start-Sleep { }
             Mock Get-EpicInstalledGame { [pscustomobject]@{ Name = 'Example'; AppId = 'ExampleGame'; LaunchExecutable = 'Example.exe' } }
 
-            Show-LegionGoRuntimeEpicCompanion
+            Start-EpicCompanion
 
             Assert-MockCalled Get-EpicInstalledGame -Times 2 -Exactly -Scope It
         }

@@ -871,7 +871,7 @@ function Trace-EpicGameLaunch {
 }
 
 
-function Start-EpicGame {
+function Start-EpicGameSession {
     <#
     .SYNOPSIS
         Launches and monitors one installed Epic Games Launcher title.
@@ -894,6 +894,9 @@ function Start-EpicGame {
     .PARAMETER Name
         Selects an installed Epic game by display name. Wildcards are supported by
         Get-EpicInstalledGame. The result must resolve to exactly one title.
+
+    .PARAMETER Game
+        An installed-game object returned by Get-EpicInstalledGame.
 
     .PARAMETER AppId
         Selects one installed Epic game by its stable Epic AppName identifier.
@@ -923,13 +926,16 @@ function Start-EpicGame {
         PSCustomObject describing the completed Epic game session.
 
     .EXAMPLE
-        Start-EpicGame -Name 'Foretales' -ThermalProfile Performance
+        Start-EpicGameSession -Name 'Foretales' -ThermalProfile Performance
 
     .EXAMPLE
-        Start-EpicGame -AppId '487bfeacfebe4d2a921b0b1478ad6625' -LaunchTimeoutSeconds 90
+        Start-EpicGameSession -AppId '487bfeacfebe4d2a921b0b1478ad6625' -LaunchTimeoutSeconds 90
     #>
-    [CmdletBinding(DefaultParameterSetName = 'ByName')]
+    [CmdletBinding(DefaultParameterSetName = 'ByObject')]
     param(
+        [Parameter(Mandatory, ParameterSetName = 'ByObject', ValueFromPipeline)]
+        [psobject]$Game,
+
         [Parameter(Mandatory, ParameterSetName = 'ByName')]
         [string]$Name,
 
@@ -954,14 +960,18 @@ function Start-EpicGame {
         [int]$StabilitySeconds = 2
     )
 
-    [object[]]$games = @(
-        if ($PSCmdlet.ParameterSetName -eq 'ByAppId') {
-            Get-EpicInstalledGame -AppId $AppId
-        }
-        else {
-            Get-EpicInstalledGame -Name $Name
-        }
-    )
+    process {
+        [object[]]$games = @(
+            if ($PSCmdlet.ParameterSetName -eq 'ByObject') {
+                $Game
+            }
+            elseif ($PSCmdlet.ParameterSetName -eq 'ByAppId') {
+                Get-EpicInstalledGame -AppId $AppId
+            }
+            else {
+                Get-EpicInstalledGame -Name $Name
+            }
+        )
 
     if (@($games).Count -eq 0) {
         throw 'No installed Epic game matched the requested selection.'
@@ -1170,48 +1180,11 @@ function Start-EpicGame {
         }
     }
 
-    if ($null -ne $sessionResult) {
-        $sessionResult
+        if ($null -ne $sessionResult) {
+            $sessionResult
+        }
     }
 }
-
-function Start-EpicGameSession {
-    <#
-    .SYNOPSIS
-        Launches and monitors one installed Epic Games Launcher title.
-
-    .DESCRIPTION
-        Steam-family command name for Start-EpicGame. Start-EpicGame remains
-        available for backward compatibility.
-    #>
-    [CmdletBinding(DefaultParameterSetName = 'ByName')]
-    param(
-        [Parameter(Mandatory, ParameterSetName = 'ByName')]
-        [string]$Name,
-
-        [Parameter(Mandatory, ParameterSetName = 'ByAppId')]
-        [string]$AppId,
-
-        [Alias('TDProfile')]
-        [ValidateSet('Quiet', 'Balanced', 'Performance')]
-        [string]$ThermalProfile,
-
-        [string[]]$ProcessName,
-        [Nullable[bool]]$UseLosslessScaling,
-
-        [ValidateRange(5, 3600)]
-        [int]$LaunchTimeoutSeconds,
-
-        [ValidateRange(100, 5000)]
-        [int]$PollIntervalMilliseconds,
-
-        [ValidateRange(0, 10)]
-        [int]$StabilitySeconds
-    )
-
-    Start-EpicGame @PSBoundParameters
-}
-
 
 function Select-EpicThermalProfile {
     [CmdletBinding()]
@@ -1277,7 +1250,7 @@ function Get-EpicInteractiveLibrary {
     ) | Sort-Object Name
 }
 
-function Show-LegionGoRuntimeEpicCompanion {
+function Start-EpicCompanion {
     <#
     .SYNOPSIS
         Opens the interactive Epic Companion menu.
@@ -1412,17 +1385,6 @@ function Show-LegionGoRuntimeEpicCompanion {
     }
 }
 
-function Start-EpicCompanion {
-    <#
-    .SYNOPSIS
-        Compatibility wrapper for Show-LegionGoRuntimeEpicCompanion.
-    #>
-    [CmdletBinding()]
-    param()
-
-    Show-LegionGoRuntimeEpicCompanion
-}
-
 Export-ModuleMember -Function @(
     'Get-EpicCompanionSetting',
     'Set-EpicCompanionSetting',
@@ -1431,8 +1393,6 @@ Export-ModuleMember -Function @(
     'Remove-EpicGameProfile',
     'Get-EpicInstalledGame',
     'Trace-EpicGameLaunch',
-    'Start-EpicGame',
     'Start-EpicGameSession',
-    'Show-LegionGoRuntimeEpicCompanion',
     'Start-EpicCompanion'
 )

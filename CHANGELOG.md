@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.0.0 - 2026-08-16
+
+- Normalized the public API with the Steam companion around
+  `Start-EpicCompanion` and `Start-EpicGameSession`.
+- Removed the legacy `Show-LegionGoRuntimeEpicCompanion` and `Start-EpicGame`
+  commands rather than retaining compatibility aliases.
+- Added pipeline `Game` selection to `Start-EpicGameSession`, matching Steam's
+  AppId, Name, pipeline, thermal, process, Lossless Scaling, timeout, polling,
+  and stability parameter surface.
+
 ## 0.9.0 - 2026-08-15
 
 - Added `Start-EpicGameSession` as the Steam-family session command while

@@ -48,7 +48,7 @@ $modulePath = Join-Path -Path $PSScriptRoot -ChildPath 'LegionGoRuntimeEpicCompa
 Import-Module -Name $modulePath -Force
 
 if ($PSCmdlet.ParameterSetName -eq 'Interactive') {
-    Show-LegionGoRuntimeEpicCompanion
+    Start-EpicCompanion
     return
 }
 

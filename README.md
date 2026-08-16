@@ -2,9 +2,9 @@
 
 Epic Games Launcher companion for `LegionGoRuntime`.
 
-## Version 0.9.0 scope
+## Version 1.0.0 scope
 
-Version 0.9.0 supports:
+Version 1.0.0 supports:
 
 - installed Epic game discovery from `.item` manifests
 - diagnostic launch/process tracing
@@ -14,11 +14,11 @@ Version 0.9.0 supports:
 - persistent global thermal default
 - persistent per-game thermal overrides keyed by Epic `AppId`
 - explicit one-session thermal overrides
-- Steam-consistent search/settings/launch menu via `Show-LegionGoRuntimeEpicCompanion`
+- Steam-consistent search/settings/launch menu via `Start-EpicCompanion`
 - optional Lossless Scaling startup and lifecycle cleanup
 - persisted launch timeout and polling settings
 - interactive installed-library refresh
-- `Start-EpicGameSession` as the preferred Steam-family session command
+- `Start-EpicGameSession` as the session command
 
 Settings are stored for the current user at:
 
@@ -30,8 +30,7 @@ The settings file is written atomically to reduce the chance of corruption.
 
 ## Profile resolution order
 
-`Start-EpicGameSession` and its compatibility command `Start-EpicGame` resolve
-the effective thermal profile in this order:
+`Start-EpicGameSession` resolves the effective thermal profile in this order:
 
 1. explicit `-ThermalProfile` / `-TDProfile`
 2. saved per-game profile
@@ -107,8 +106,7 @@ Start-EpicGameSession -Name 'Foretales' -ThermalProfile Quiet | Format-List *
 Existing instances of the manifest executable are excluded before launch. Epic launcher helpers, EOS installers, overlays, and unrelated processes are not adopted as the game session.
 
 The default launch timeout is 300 seconds, the default polling interval is 2
-seconds, and the default stability check is 2 seconds. `Start-EpicGame` remains
-available for backward compatibility.
+seconds, and the default stability check is 2 seconds.
 
 ## Discovery
 
@@ -171,7 +169,7 @@ Use `R` from the main interactive menu to rescan Epic manifests.
 
 ## Interactive launcher
 
-Use `Show-LegionGoRuntimeEpicCompanion`, or run `Start-LegionGoRuntimeEpicCompanion.ps1`. `Start-EpicCompanion` remains as a compatibility wrapper.
+Use `Start-EpicCompanion`, or run `Start-LegionGoRuntimeEpicCompanion.ps1`.
 
 
 ## Dual-mode launcher wrapper

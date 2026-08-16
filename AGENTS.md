@@ -25,6 +25,14 @@ differences do not prevent it.
   collections in `@()` before reading `.Count`.
 - Preserve public command names, parameters, accepted inputs, output shapes,
   and behavior unless an API change is explicitly approved.
+- Keep the shared public command families parallel with other launcher
+  companions: `Get-<Launcher>CompanionSetting`,
+  `Set-<Launcher>CompanionSetting`, installed-game discovery, game-profile
+  CRUD, `Start-<Launcher>GameSession`, and `Start-<Launcher>Companion`.
+  Launcher-specific diagnostic commands may be added only when the underlying
+  launcher requires them.
+- Keep `Start-EpicGameSession` selection and one-session override parameters
+  aligned with the corresponding session command in each companion.
 - Keep the manifest `FunctionsToExport` list and `Export-ModuleMember` list
   explicit and synchronized.
 
