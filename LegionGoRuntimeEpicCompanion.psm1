@@ -594,6 +594,110 @@ function Get-EpicInstalledGame {
     $games | Sort-Object Name, AppId
 }
 
+function Get-EpicLosslessScalingFilter {
+    <#
+    .SYNOPSIS
+        Gets executable filenames suitable for Lossless Scaling Epic profiles.
+
+    .DESCRIPTION
+        Resolves exactly one installed Epic game and converts its saved process
+        override or manifest launch executable into a filename-only filter.
+
+    .PARAMETER Name
+        Selects one installed Epic game by display name. Wildcards are supported;
+        the result must resolve to exactly one title.
+
+    .PARAMETER AppId
+        Selects one installed Epic game by stable AppName identifier.
+
+    .PARAMETER Game
+        An installed-game object returned by Get-EpicInstalledGame.
+
+    .PARAMETER PrimaryOnly
+        Returns only the primary executable.
+
+    .EXAMPLE
+        Get-EpicLosslessScalingFilter -Name 'Alan Wake'
+
+    .EXAMPLE
+        Get-EpicLosslessScalingFilter -AppId 'ExampleGame' -PrimaryOnly
+    #>
+    [CmdletBinding(DefaultParameterSetName = 'ByName')]
+    param(
+        [Parameter(Mandatory, ParameterSetName = 'ByName')]
+        [string]$Name,
+
+        [Parameter(Mandatory, ParameterSetName = 'ByAppId')]
+        [string]$AppId,
+
+        [Parameter(Mandatory, ParameterSetName = 'ByObject', ValueFromPipeline)]
+        [psobject]$Game,
+
+        [switch]$PrimaryOnly
+    )
+
+    process {
+        [object[]]$games = @(
+            if ($PSCmdlet.ParameterSetName -eq 'ByObject') {
+                $Game
+            }
+            elseif ($PSCmdlet.ParameterSetName -eq 'ByAppId') {
+                Get-EpicInstalledGame -AppId $AppId
+            }
+            else {
+                Get-EpicInstalledGame -Name $Name
+            }
+        )
+
+        if (@($games).Count -eq 0) {
+            throw 'No installed Epic game matched the requested selection.'
+        }
+        if (@($games).Count -gt 1) {
+            $matchedNames = ($games | ForEach-Object { $_.Name }) -join ', '
+            throw ("The selection matched more than one Epic game: {0}. Use -AppId or a more specific -Name." -f $matchedNames)
+        }
+
+        $resolvedGame = $games[0]
+        $source = 'EpicManifest'
+        [object[]]$registeredExecutables = @()
+        $savedProfile = Get-EpicGameProfile -AppId ([string]$resolvedGame.AppId) | Select-Object -First 1
+        if ($savedProfile -and @($savedProfile.ProcessName).Count -gt 0) {
+            $registeredExecutables = @($savedProfile.ProcessName)
+            $source = 'GameProfileOverride'
+        }
+        elseif ($resolvedGame.PSObject.Properties['LaunchExecutables']) {
+            $registeredExecutables = @($resolvedGame.LaunchExecutables)
+        }
+        elseif ($resolvedGame.PSObject.Properties['LaunchExecutable']) {
+            $registeredExecutables = @($resolvedGame.LaunchExecutable)
+        }
+
+        [string[]]$executableNames = @(
+            $registeredExecutables |
+                ForEach-Object { [System.IO.Path]::GetFileName([string]$_) } |
+                Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
+                Select-Object -Unique
+        )
+        if ($executableNames.Count -eq 0) {
+            throw ("Epic game '{0}' does not have a manifest executable suitable for Lossless Scaling." -f $resolvedGame.Name)
+        }
+
+        if ($PrimaryOnly) {
+            $executableNames = [string[]]@($executableNames | Select-Object -First 1)
+        }
+
+        for ($index = 0; $index -lt $executableNames.Count; $index++) {
+            [pscustomobject]@{
+                GameName       = [string]$resolvedGame.Name
+                AppId          = [string]$resolvedGame.AppId
+                ExecutableName = [string]$executableNames[$index]
+                IsPrimary      = ($index -eq 0)
+                Source         = $source
+            }
+        }
+    }
+}
+
 function Get-EpicProcessSnapshot {
     <#
     .SYNOPSIS
@@ -1264,10 +1368,48 @@ function Start-EpicCompanion {
     while ($true) {
         Clear-Host
         Write-Host '=== Legion Go Runtime Epic Companion ==='
-        Write-Host 'Type part of a game name to filter, A for all games, R to refresh, S for settings, or Q to quit.'
+        Write-Host 'Type part of a game name to filter, A for all games, L for a Lossless Scaling executable, R to refresh, S for settings, or Q to quit.'
         $choice = Read-Host 'Selection'
 
         if ($choice -match '^(?i)q$') { return }
+        if ($choice -match '^(?i)l$') {
+            Clear-Host
+            Write-Host '=== Lossless Scaling Executable Lookup ==='
+            $filter = Read-Host 'Enter part of the game name'
+            [object[]]$filterGames = @($games | Where-Object Name -Like "*$filter*")
+            if (@($filterGames).Count -eq 0) {
+                Read-Host 'No matching games. Press Enter to return' | Out-Null
+                continue
+            }
+
+            for ($index = 0; $index -lt @($filterGames).Count; $index++) {
+                Write-Host ('[{0}] {1} (App ID {2})' -f ($index + 1), $filterGames[$index].Name, $filterGames[$index].AppId)
+            }
+
+            $selectedNumber = 0
+            $value = Read-Host 'Game number'
+            if (-not [int]::TryParse($value, [ref]$selectedNumber) -or
+                $selectedNumber -lt 1 -or $selectedNumber -gt @($filterGames).Count) {
+                Write-Host 'Invalid selection.'
+                Start-Sleep -Seconds 1
+                continue
+            }
+
+            $selectedGame = $filterGames[$selectedNumber - 1]
+            [object[]]$losslessScalingFilters = @(Get-EpicLosslessScalingFilter -Game $selectedGame)
+
+            Write-Host ''
+            Write-Host ('Lossless Scaling executable filter for {0}:' -f $selectedGame.Name)
+            foreach ($losslessScalingFilter in $losslessScalingFilters) {
+                $primaryLabel = if ($losslessScalingFilter.IsPrimary) { ' [Primary]' } else { '' }
+                Write-Host ('  {0}{1}' -f $losslessScalingFilter.ExecutableName, $primaryLabel)
+            }
+            Write-Host ''
+            Write-Host 'Type the filename only into the Lossless Scaling application/filter field.'
+            Write-Host 'Type the executable filename only; do not include its full path.'
+            Read-Host 'Press Enter to return' | Out-Null
+            continue
+        }
         if ($choice -match '^(?i)r$') {
             $games = @(Get-EpicInstalledGame)
             Write-Host ("Epic library refreshed. {0} installed game(s) found." -f @($games).Count)
@@ -1392,6 +1534,7 @@ Export-ModuleMember -Function @(
     'Set-EpicGameProfile',
     'Remove-EpicGameProfile',
     'Get-EpicInstalledGame',
+    'Get-EpicLosslessScalingFilter',
     'Trace-EpicGameLaunch',
     'Start-EpicGameSession',
     'Start-EpicCompanion'

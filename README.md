@@ -2,9 +2,9 @@
 
 Epic Games Launcher companion for `LegionGoRuntime`.
 
-## Version 1.0.0 scope
+## Version 1.1.0 scope
 
-Version 1.0.0 supports:
+Version 1.1.0 supports:
 
 - installed Epic game discovery from `.item` manifests
 - diagnostic launch/process tracing
@@ -16,6 +16,7 @@ Version 1.0.0 supports:
 - explicit one-session thermal overrides
 - Steam-consistent search/settings/launch menu via `Start-EpicCompanion`
 - optional Lossless Scaling startup and lifecycle cleanup
+- filename-only Lossless Scaling executable lookup from Epic manifests
 - persisted launch timeout and polling settings
 - interactive installed-library refresh
 - `Start-EpicGameSession` as the session command
@@ -191,6 +192,19 @@ Epic remains responsible for game-specific launch arguments and behavior.
 
 
 ## Lossless Scaling
+
+Use the public helper to get the exact filename to enter in a Lossless Scaling
+application/filter profile:
+
+```powershell
+Get-EpicLosslessScalingFilter -Name 'Alan Wake'
+Get-EpicLosslessScalingFilter -AppId 'ExampleGame' -PrimaryOnly
+```
+
+The helper prefers a saved `ProcessName` override, then uses the launch
+executable registered in Epic's `.item` manifest. Its output intentionally
+contains the executable filename only, not the full path. The same lookup is
+available as `L` on the interactive main menu.
 
 The global default is enabled, per-game profiles may override it, and
 `Start-EpicGameSession -UseLosslessScaling $false` can override it for one

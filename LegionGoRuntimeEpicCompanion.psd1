@@ -1,6 +1,6 @@
 ﻿@{
     RootModule        = 'LegionGoRuntimeEpicCompanion.psm1'
-    ModuleVersion     = '1.0.0'
+    ModuleVersion     = '1.1.0'
     GUID              = '3dc3bfe6-467c-4d0e-a1bd-1ea3c29a20ce'
     Author            = '0ldePSN00b'
     CompanyName       = 'Independent'
@@ -14,6 +14,7 @@
         'Set-EpicGameProfile',
         'Remove-EpicGameProfile',
         'Get-EpicInstalledGame',
+        'Get-EpicLosslessScalingFilter',
         'Trace-EpicGameLaunch',
         'Start-EpicGameSession',
         'Start-EpicCompanion'
@@ -25,7 +26,7 @@
         PSData = @{
             Tags         = @('EpicGames', 'LegionGo', 'LegionGoRuntime', 'EpicCompanion', 'Gaming')
             ProjectUri   = ''
-            ReleaseNotes = 'Introduces the normalized 1.0 command surface shared by launcher companions, centered on Start-EpicCompanion and Start-EpicGameSession without legacy command aliases.'
+            ReleaseNotes = 'Adds filename-only Lossless Scaling executable lookup through Get-EpicLosslessScalingFilter and the interactive L menu action.'
         }
     }
 }

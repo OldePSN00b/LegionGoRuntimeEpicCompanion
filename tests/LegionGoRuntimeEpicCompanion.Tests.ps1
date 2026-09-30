@@ -26,6 +26,7 @@ Describe 'Module contract' {
             'Get-EpicCompanionSetting',
             'Get-EpicGameProfile',
             'Get-EpicInstalledGame',
+            'Get-EpicLosslessScalingFilter',
             'Remove-EpicGameProfile',
             'Set-EpicCompanionSetting',
             'Set-EpicGameProfile',
@@ -41,6 +42,52 @@ Describe 'Module contract' {
         $command = Get-Command Start-EpicGameSession
         @($command.ParameterSets.Name | Sort-Object) -join ',' | Should Be 'ByAppId,ByName,ByObject'
         $command.Parameters['Game'].Attributes.ValueFromPipeline | Should Be $true
+    }
+}
+
+Describe 'Lossless Scaling executable lookup' {
+    InModuleScope LegionGoRuntimeEpicCompanion {
+        It 'returns the filename from the Epic manifest launch executable' {
+            Mock Get-EpicInstalledGame {
+                [pscustomobject]@{
+                    Name = 'Example Game'; AppId = 'ExampleGame'; LaunchExecutable = 'Binaries\Win64\ExampleGame.exe'
+                }
+            }
+            Mock Get-EpicGameProfile { }
+
+            $result = @(Get-EpicLosslessScalingFilter -Name 'Example')
+
+            $result.Count | Should Be 1
+            $result[0].ExecutableName | Should Be 'ExampleGame.exe'
+            $result[0].IsPrimary | Should Be $true
+            $result[0].Source | Should Be 'EpicManifest'
+        }
+
+        It 'prefers a saved process override and supports PrimaryOnly' {
+            $game = [pscustomobject]@{
+                Name = 'Example Game'; AppId = 'ExampleGame'; LaunchExecutable = 'Launcher.exe'
+            }
+            Mock Get-EpicGameProfile {
+                [pscustomobject]@{ AppId = 'ExampleGame'; ProcessName = @('RealGame.exe', 'Alternate.exe') }
+            }
+
+            $result = @(Get-EpicLosslessScalingFilter -Game $game -PrimaryOnly)
+
+            $result.Count | Should Be 1
+            $result[0].ExecutableName | Should Be 'RealGame.exe'
+            $result[0].Source | Should Be 'GameProfileOverride'
+        }
+
+        It 'rejects an ambiguous name selection' {
+            Mock Get-EpicInstalledGame {
+                @(
+                    [pscustomobject]@{ Name = 'Example One'; AppId = 'One'; LaunchExecutable = 'One.exe' },
+                    [pscustomobject]@{ Name = 'Example Two'; AppId = 'Two'; LaunchExecutable = 'Two.exe' }
+                )
+            }
+
+            { Get-EpicLosslessScalingFilter -Name 'Example' } | Should Throw
+        }
     }
 }
 
@@ -209,6 +256,27 @@ Describe 'Interactive settings actions' {
             Start-EpicCompanion
 
             Assert-MockCalled Get-EpicInstalledGame -Times 2 -Exactly -Scope It
+        }
+
+        It 'looks up a Lossless Scaling executable when L is selected' {
+            $script:answers = @('l', 'Example', '1', '', 'q')
+            Mock Read-Host {
+                $answer = $script:answers[0]
+                $script:answers = @($script:answers | Select-Object -Skip 1)
+                $answer
+            }
+            Mock Clear-Host { }
+            Mock Write-Host { }
+            Mock Get-EpicInstalledGame { [pscustomobject]@{ Name = 'Example'; AppId = 'ExampleGame'; LaunchExecutable = 'Example.exe' } }
+            Mock Get-EpicLosslessScalingFilter {
+                [pscustomobject]@{ GameName = 'Example'; AppId = 'ExampleGame'; ExecutableName = 'Example.exe'; IsPrimary = $true; Source = 'EpicManifest' }
+            }
+
+            Start-EpicCompanion
+
+            Assert-MockCalled Get-EpicLosslessScalingFilter -Times 1 -Exactly -Scope It -ParameterFilter {
+                $Game.AppId -eq 'ExampleGame'
+            }
         }
     }
 }
